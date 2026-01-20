@@ -2,6 +2,7 @@ package run.halo.oauth;
 
 import static org.apache.commons.lang3.ObjectUtils.defaultIfNull;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -73,17 +74,20 @@ public class OauthClientRegistrationRepository implements ReactiveClientRegistra
             )
             .flatMap(data -> {
                 String value = data.getOrDefault(group, "{}");
-                if(SSO_PROVIDER_NAME.equals(name)) {
-                    SsoClientConf ssoClientConf = JsonUtils.jsonToObject(value, SsoClientConf.class);
+                if (SSO_PROVIDER_NAME.equals(name)) {
+                    SsoClientConf ssoClientConf =
+                        JsonUtils.jsonToObject(value, SsoClientConf.class);
                     return SsoClientRegistration(ssoClientConf, authProvider);
                 }
 
-                GenericClientConf genericClientConf = JsonUtils.jsonToObject(value, GenericClientConf.class);
+                GenericClientConf genericClientConf =
+                    JsonUtils.jsonToObject(value, GenericClientConf.class);
                 return GenericClientRegistration(genericClientConf, authProvider);
             });
     }
 
-    private Mono<ClientRegistration> GenericClientRegistration(GenericClientConf genericClientConf, AuthProvider authProvider) {
+    private Mono<ClientRegistration> GenericClientRegistration(GenericClientConf genericClientConf,
+        AuthProvider authProvider) {
         if (StringUtils.isBlank(genericClientConf.clientId())) {
             return Mono.error(new IllegalArgumentException("clientId must not be blank"));
         }
@@ -104,23 +108,42 @@ public class OauthClientRegistrationRepository implements ReactiveClientRegistra
             );
     }
 
-    private Mono<ClientRegistration> SsoClientRegistration(SsoClientConf ssoClientConf, AuthProvider authProvider) {
+    private Mono<ClientRegistration> SsoClientRegistration(SsoClientConf ssoClientConf,
+        AuthProvider authProvider) {
         String registrationId = authProvider.getMetadata().getName();
         return client.fetch(Oauth2ClientRegistration.class, registrationId)
             .switchIfEmpty(Mono.error(new NotFoundException(
                 "Oauth2 client registration " + registrationId + " not found")
             ))
-            .map(oauth2ClientRegistration -> clientRegistrationBuilder(
-                oauth2ClientRegistration)
-                .clientId(ssoClientConf.clientId())
-                .clientSecret(ssoClientConf.clientSecret())
-                .authorizationUri(ssoClientConf.authorizationUrl())
-                .tokenUri(ssoClientConf.tokenUrl())
-                .userInfoUri(ssoClientConf.userInfoUrl())
-                .scope(ssoClientConf.scopes())
-                .userNameAttributeName(ssoClientConf.userNameAttribute())
-                .build()
-            );
+            .map(oauth2ClientRegistration -> {
+                ClientRegistration.Builder builder =
+                    clientRegistrationBuilder(oauth2ClientRegistration)
+                        .clientId(ssoClientConf.clientId())
+                        .clientSecret(ssoClientConf.clientSecret())
+                        .authorizationUri(ssoClientConf.authorizationUrl())
+                        .tokenUri(ssoClientConf.tokenUrl())
+                        .userInfoUri(ssoClientConf.userInfoUrl())
+                        .userNameAttributeName(ssoClientConf.userNameAttribute());
+
+                if (StringUtils.isNotBlank(ssoClientConf.issuerUri())) {
+                    builder.issuerUri(ssoClientConf.issuerUri());
+                }
+                if (StringUtils.isNotBlank(ssoClientConf.jwkSetUri())) {
+                    builder.jwkSetUri(ssoClientConf.jwkSetUri());
+                }
+
+                // e.g. "openid profile", "openid,profile" or "openid, profile"
+                String scopesStr = ssoClientConf.scopes();
+                if (!StringUtils.isBlank(scopesStr)) {
+                    Set<String> scopes = Arrays.stream(scopesStr.split("\\s+|,\\s*"))
+                        .map(String::trim)
+                        .filter(s -> !s.isEmpty())
+                        .collect(Collectors.toSet());
+                    builder.scope(scopes);
+                }
+
+                return builder.build();
+            });
     }
 
     record GenericClientConf(String clientId, String clientSecret) {
@@ -136,7 +159,7 @@ public class OauthClientRegistrationRepository implements ReactiveClientRegistra
 
     record SsoClientConf(String clientId, String clientSecret, String authorizationUrl,
                          String tokenUrl, String userInfoUrl, String scopes,
-                         String userNameAttribute) {
+                         String userNameAttribute, String issuerUri, String jwkSetUri) {
         SsoClientConf {
             if (StringUtils.isBlank(clientId)) {
                 throw new IllegalArgumentException("clientId must not be blank");
